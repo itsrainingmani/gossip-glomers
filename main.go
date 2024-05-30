@@ -8,8 +8,19 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
+type Topology map[string][]string
+
+type TopologyMessage struct {
+	Type      string   `json:"type"`
+	Topology  Topology `json:"topology"`
+	MessageID int      `json:"msg_id"`
+}
+
+var topo Topology
+
 func main() {
 	n := maelstrom.NewNode()
+	received_msgs := make([]any, 10)
 
 	// Challenge #1 : Echo - https://fly.io/dist-sys/1/
 	n.Handle("echo", func(msg maelstrom.Message) error {
@@ -41,6 +52,51 @@ func main() {
 		body["id"] = uuid.New()
 
 		return n.Reply(msg, body)
+	})
+
+	// Challenge #3: Broadcast - https://fly.io/dist-sys/3a/
+	n.Handle("topology", func(msg maelstrom.Message) error {
+		var body TopologyMessage
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		topo = body.Topology
+
+		ret := map[string]any{}
+
+		ret["type"] = "topology_ok"
+		ret["in_reply_to"] = body.MessageID
+		return n.Reply(msg, ret)
+	})
+
+	n.Handle("read", func(msg maelstrom.Message) error {
+		var body map[string]any
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+		ret := map[string]any{}
+		ret["type"] = "read_ok"
+		ret["in_reply_to"] = body["msg_id"]
+		ret["messages"] = received_msgs
+		return n.Reply(msg, ret)
+	})
+
+	n.Handle("broadcast", func(msg maelstrom.Message) error {
+		var body map[string]any
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		received_msgs = append(received_msgs, body["message"])
+
+		for _, id := range n.NodeIDs() {
+			if id != n.ID() {
+				n.Send(id, body)
+			}
+		}
+
+		return n.Reply(msg, map[string]any{"type": "broadcast_ok"})
 	})
 
 	if err := n.Run(); err != nil {
