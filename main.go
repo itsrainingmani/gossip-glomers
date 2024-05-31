@@ -16,12 +16,10 @@ type TopoMsg struct {
 }
 
 type server struct {
-	n      *maelstrom.Node
-	nodeId string
+	n *maelstrom.Node
 
 	msgMutex sync.RWMutex
-	// msgs     []int
-	msgs map[int]bool
+	msgs     map[int]bool
 
 	topoMutex sync.RWMutex
 	topo      map[string][]string
@@ -29,7 +27,7 @@ type server struct {
 
 func main() {
 	n := maelstrom.NewNode()
-	s := &server{n: n, nodeId: n.ID(), msgs: make(map[int]bool)}
+	s := &server{n: n, msgs: make(map[int]bool)}
 
 	n.Handle("echo", s.echoHandler)
 	n.Handle("generate", s.generateHandler)
@@ -68,17 +66,17 @@ func (s *server) generateHandler(msg maelstrom.Message) error {
 
 // Challenge #3: Broadcast - https://fly.io/dist-sys/3a/
 func (s *server) topologyHandler(msg maelstrom.Message) error {
-	// var body TopoMsg
-	// if err := json.Unmarshal(msg.Body, &body); err != nil {
-	// 	return err
-	// }
+	var body TopoMsg
+	if err := json.Unmarshal(msg.Body, &body); err != nil {
+		return err
+	}
 
-	// s.topoMutex.Lock()
-	// s.topo = body.Topology
-	// s.topoMutex.Unlock()
+	s.topoMutex.Lock()
+	s.topo = body.Topology
+	s.topoMutex.Unlock()
 	return s.n.Reply(msg, map[string]any{
-		"type": "topology_ok",
-		// "in_reply_to": body.MessageID,
+		"type":        "topology_ok",
+		"in_reply_to": body.MessageID,
 	})
 }
 
@@ -86,9 +84,6 @@ func (s *server) readHandler(msg maelstrom.Message) error {
 	// Don't really need to handle the message body because we're only going to send back all the messages that we've received
 	s.msgMutex.RLock()
 	messages := make([]int, len(s.msgs))
-	// for i := 0; i < len(s.msgs); i++ {
-	// 	messages[i] = s.msgs[i]
-	// }
 	for id := range s.msgs {
 		messages = append(messages, id)
 	}
@@ -107,7 +102,6 @@ func (s *server) broadcastHandler(msg maelstrom.Message) error {
 	rcvd_message := int(body["message"].(float64))
 
 	s.msgMutex.Lock()
-	// s.msgs = append(s.msgs, rcvd_message)
 	if _, exists := s.msgs[rcvd_message]; exists {
 		s.msgMutex.Unlock()
 		return nil
@@ -115,20 +109,30 @@ func (s *server) broadcastHandler(msg maelstrom.Message) error {
 	s.msgs[rcvd_message] = true
 	s.msgMutex.Unlock()
 
-	for _, node_id := range s.n.NodeIDs() {
-		if node_id == msg.Src || node_id == s.nodeId {
-			continue
-		}
-
-		dst := node_id
-		go func() {
-			if err := s.n.Send(dst, body); err != nil {
-				panic(err)
-			}
-		}()
+	if err := s.broadcast(s.n.ID(), body); err != nil {
+		return err
 	}
 
 	return s.n.Reply(msg, map[string]any{
 		"type": "broadcast_ok",
 	})
+}
+
+func (s *server) broadcast(src string, body map[string]any) error {
+	log.Printf("node_id: %+v, neighbors: %+v ", src, s.topo[src])
+	if neighbors, exists := s.topo[src]; exists {
+		for _, node_id := range neighbors {
+			if node_id == src || node_id == s.n.ID() {
+				continue
+			}
+
+			dst := node_id
+			go func() {
+				if err := s.n.Send(dst, body); err != nil {
+					panic(err)
+				}
+			}()
+		}
+	}
+	return nil
 }
