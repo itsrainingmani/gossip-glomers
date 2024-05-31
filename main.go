@@ -10,10 +10,16 @@ import (
 
 type Topology map[string][]string
 
-type TopologyMessage struct {
+type TopoMsg struct {
 	Type      string   `json:"type"`
 	Topology  Topology `json:"topology"`
 	MessageID int      `json:"msg_id"`
+}
+
+type BroadcastMsg struct {
+	Type      string `json:"type"`
+	Message   any    `json:"message"`
+	MessageID int    `json:"msg_id"`
 }
 
 var topo Topology
@@ -56,7 +62,7 @@ func main() {
 
 	// Challenge #3: Broadcast - https://fly.io/dist-sys/3a/
 	n.Handle("topology", func(msg maelstrom.Message) error {
-		var body TopologyMessage
+		var body TopoMsg
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
@@ -83,16 +89,25 @@ func main() {
 	})
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
-		var body map[string]any
+		var body BroadcastMsg
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
 
-		received_msgs = append(received_msgs, body["message"])
+		if body.Message != nil {
+			received_msgs = append(received_msgs, body.Message)
+		}
 
-		for _, id := range n.NodeIDs() {
-			if id != n.ID() {
-				n.Send(id, body)
+		// Use the network topology to send a message to all nodes
+		// make queue of neighboring nodes
+		// visited := set.New[string](10)
+		// queue := make([]string, 10)
+
+		if _, ok := topo[msg.Src]; !ok {
+			for _, elem := range n.NodeIDs() {
+				if elem != n.ID() {
+					n.Send(elem, body)
+				}
 			}
 		}
 
