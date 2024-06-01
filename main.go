@@ -16,13 +16,11 @@ type TopoMsg struct {
 }
 
 type server struct {
-	n *maelstrom.Node
+	n         *maelstrom.Node
+	neighbors []string
 
 	msgMutex sync.RWMutex
 	msgs     map[int]bool
-
-	topoMutex sync.RWMutex
-	topo      map[string][]string
 }
 
 func main() {
@@ -71,9 +69,7 @@ func (s *server) topologyHandler(msg maelstrom.Message) error {
 		return err
 	}
 
-	s.topoMutex.Lock()
-	s.topo = body.Topology
-	s.topoMutex.Unlock()
+	s.neighbors = body.Topology[s.n.ID()]
 	return s.n.Reply(msg, map[string]any{
 		"type":        "topology_ok",
 		"in_reply_to": body.MessageID,
@@ -83,7 +79,7 @@ func (s *server) topologyHandler(msg maelstrom.Message) error {
 func (s *server) readHandler(msg maelstrom.Message) error {
 	// Don't really need to handle the message body because we're only going to send back all the messages that we've received
 	s.msgMutex.RLock()
-	messages := make([]int, len(s.msgs))
+	messages := make([]int, 0, len(s.msgs))
 	for id := range s.msgs {
 		messages = append(messages, id)
 	}
@@ -119,20 +115,17 @@ func (s *server) broadcastHandler(msg maelstrom.Message) error {
 }
 
 func (s *server) broadcast(src string, body map[string]any) error {
-	log.Printf("node_id: %+v, neighbors: %+v ", src, s.topo[src])
-	if neighbors, exists := s.topo[src]; exists {
-		for _, node_id := range neighbors {
-			if node_id == src || node_id == s.n.ID() {
-				continue
-			}
-
-			dst := node_id
-			go func() {
-				if err := s.n.Send(dst, body); err != nil {
-					panic(err)
-				}
-			}()
+	log.Printf("node_id: %+v, neighbors: %+v ", src, s.neighbors)
+	for _, neighbor := range s.neighbors {
+		if neighbor == src || neighbor == s.n.ID() {
+			continue
 		}
+
+		go func(neighbor string) {
+			if err := s.n.Send(neighbor, body); err != nil {
+				panic(err)
+			}
+		}(neighbor)
 	}
 	return nil
 }
