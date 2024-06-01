@@ -15,6 +15,10 @@ unique:
 single-broad:
   go install . && ./maelstrom/maelstrom test -w broadcast --bin ~/go/bin/gossglom --node-count 1 --time-limit 20 --rate 10
 
-# challenge 3a: single node broadcast
+# challenge 3b: multi node broadcast
 multi-broad:
   go install . && ./maelstrom/maelstrom test -w broadcast --bin ~/go/bin/gossglom --node-count 5 --time-limit 20 --rate 10
+
+# challenge 3c: fault tolerant broadcast
+faulty-broad:
+  go install . && ./maelstrom/maelstrom test -w broadcast --bin ~/go/bin/gossglom --node-count 5 --time-limit 20 --rate 10 --nemesis partition
