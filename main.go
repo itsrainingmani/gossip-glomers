@@ -15,6 +15,12 @@ type TopoMsg struct {
 	MessageID int                 `json:"msg_id"`
 }
 
+// type BroadcastMsg struct {
+// 	Type      string `json:"type"`
+// 	Message   int    `json:"message"`
+// 	MessageID int    `json:"msg_id"`
+// }
+
 type server struct {
 	n         *maelstrom.Node
 	neighbors []string
@@ -105,27 +111,41 @@ func (s *server) broadcastHandler(msg maelstrom.Message) error {
 	s.msgs[rcvd_message] = true
 	s.msgMutex.Unlock()
 
-	if err := s.broadcast(s.n.ID(), body); err != nil {
-		return err
+	for _, neighbor := range s.neighbors {
+		if neighbor != msg.Src {
+			go func(neighbor string) {
+				if err := s.n.Send(neighbor, map[string]any{
+					"type":    "broadcast",
+					"message": body["message"],
+				}); err != nil {
+					panic(err)
+				}
+			}(neighbor)
+		}
 	}
 
-	return s.n.Reply(msg, map[string]any{
-		"type": "broadcast_ok",
-	})
+	// Inter-server messages don't have a msg_id, so don't need a response
+	if _, exists := body["msg_id"]; exists {
+		return s.n.Reply(msg, map[string]any{
+			"type": "broadcast_ok",
+		})
+	}
+
+	return nil
 }
 
-func (s *server) broadcast(src string, body map[string]any) error {
-	log.Printf("node_id: %+v, neighbors: %+v ", src, s.neighbors)
+func (s *server) gossip(src string, body map[string]any) error {
 	for _, neighbor := range s.neighbors {
-		if neighbor == src || neighbor == s.n.ID() {
-			continue
+		if neighbor != src && neighbor != s.n.ID() {
+			go func(neighbor string) {
+				if err := s.n.Send(neighbor, map[string]any{
+					"type":    "broadcast",
+					"message": body["message"],
+				}); err != nil {
+					panic(err)
+				}
+			}(neighbor)
 		}
-
-		go func(neighbor string) {
-			if err := s.n.Send(neighbor, body); err != nil {
-				panic(err)
-			}
-		}(neighbor)
 	}
 	return nil
 }
