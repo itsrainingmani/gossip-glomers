@@ -25,13 +25,15 @@ type Server struct {
 	Node      *maelstrom.Node
 	Neighbors []string
 	Msgs      map[int]bool
+	NextMsgID int
+	Callbacks map[int]*maelstrom.HandlerFunc
 
 	Mutex sync.RWMutex
 }
 
 func main() {
 	node := maelstrom.NewNode()
-	server := &Server{Node: node, Msgs: make(map[int]bool)}
+	server := &Server{Node: node, Msgs: make(map[int]bool), NextMsgID: 0, Callbacks: make(map[int]*maelstrom.HandlerFunc)}
 
 	node.Handle("echo", server.echoHandler)
 	node.Handle("generate", server.generateHandler)
@@ -114,18 +116,12 @@ func (s *Server) broadcastHandler(msg maelstrom.Message) error {
 	for _, neighbor := range s.Neighbors {
 		if neighbor != msg.Src {
 			go func(neighbor string) {
-				if err := s.Node.RPC(neighbor, map[string]any{
+				if err := s.Node.Send(neighbor, map[string]any{
 					"type":    "broadcast",
 					"message": body["message"],
-				}, s.rpcCallbackHandler); err != nil {
+				}); err != nil {
 					panic(err)
 				}
-				// if err := s.n.Send(neighbor, map[string]any{
-				// 	"type":    "broadcast",
-				// 	"message": body["message"],
-				// }); err != nil {
-				// 	panic(err)
-				// }
 			}(neighbor)
 		}
 	}
@@ -140,6 +136,18 @@ func (s *Server) broadcastHandler(msg maelstrom.Message) error {
 	return nil
 }
 
-func (s *Server) rpcCallbackHandler(msg maelstrom.Message) error {
+func (s *Server) rpc(dest string, body map[string]any, handler *maelstrom.HandlerFunc) error {
+	s.Mutex.Lock()
+	s.NextMsgID += 1
+	msg_id := s.NextMsgID
+
+	s.Callbacks[msg_id] = handler
+	body["msg_id"] = msg_id
+
+	if err := s.Node.Send(dest, body); err != nil {
+		panic(err)
+	}
+
+	s.Mutex.Unlock()
 	return nil
 }
