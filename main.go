@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	uuid "github.com/google/uuid"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
@@ -103,51 +104,70 @@ func (s *Server) broadcastHandler(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
-	rcvd_message := int(body["message"].(float64))
 
+	// Inter-server messages don't have a msg_id, so don't need a response
+	if _, exists := body["msg_id"]; exists {
+		s.Node.Reply(msg, map[string]any{
+			"type": "broadcast_ok",
+		})
+	}
+
+	rcvd_message := int(body["message"].(float64))
+	new_msg := false
 	s.Mutex.Lock()
 	if _, exists := s.Msgs[rcvd_message]; exists {
 		s.Mutex.Unlock()
 		return nil
 	}
 	s.Msgs[rcvd_message] = true
+	new_msg = true
 	s.Mutex.Unlock()
 
-	for _, neighbor := range s.Neighbors {
-		if neighbor != msg.Src {
-			go func(neighbor string) {
-				if err := s.Node.Send(neighbor, map[string]any{
+	if new_msg {
+		// gossip this msg to neighbors
+		unacked := make(map[string]bool)
+		for _, v := range s.Neighbors {
+			unacked[v] = true
+		}
+
+		delete(unacked, msg.Src)
+
+		for len(unacked) > 0 {
+			// fmt.Printf("Need to replicate %v to %v", rcvd_message, unacked)
+			for neighbor, _ := range unacked {
+				if err := s.Node.RPC(neighbor, map[string]any{
 					"type":    "broadcast",
-					"message": body["message"],
+					"message": rcvd_message,
+				}, func(msg maelstrom.Message) error {
+					var body map[string]any
+					if err := json.Unmarshal(msg.Body, &body); err != nil {
+						return err
+					}
+					if body["type"] == "broadcast_ok" {
+						// They got the message
+						delete(unacked, neighbor)
+					}
+					return nil
 				}); err != nil {
 					panic(err)
 				}
-			}(neighbor)
+				time.Sleep(1 * time.Second)
+			}
 		}
 	}
 
-	// Inter-server messages don't have a msg_id, so don't need a response
-	if _, exists := body["msg_id"]; exists {
-		return s.Node.Reply(msg, map[string]any{
-			"type": "broadcast_ok",
-		})
-	}
+	// for _, neighbor := range s.Neighbors {
+	// 	if neighbor != msg.Src {
+	// 		go func(neighbor string) {
+	// 			if err := s.Node.Send(neighbor, map[string]any{
+	// 				"type":    "broadcast",
+	// 				"message": body["message"],
+	// 			}); err != nil {
+	// 				panic(err)
+	// 			}
+	// 		}(neighbor)
+	// 	}
+	// }
 
-	return nil
-}
-
-func (s *Server) rpc(dest string, body map[string]any, handler *maelstrom.HandlerFunc) error {
-	s.Mutex.Lock()
-	s.NextMsgID += 1
-	msg_id := s.NextMsgID
-
-	s.Callbacks[msg_id] = handler
-	body["msg_id"] = msg_id
-
-	if err := s.Node.Send(dest, body); err != nil {
-		panic(err)
-	}
-
-	s.Mutex.Unlock()
 	return nil
 }
